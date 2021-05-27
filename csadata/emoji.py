@@ -106,6 +106,7 @@ def extract_emojis(string: str):
     Extracts all emojis out of a given string and returns a new string containing just the emojis.
 
     :param string: The string out of which the emojis should be extracted.
-    :return: A string containing only the emojis or an empty string if no emojis were present.
+    :return: A tuple of strings, with the first one being the original string without emojis and the second one
+    containing only the emojis or an empty string if no emojis were present.
     """
     return EMOJI_REGEX.sub("", string), "".join(EMOJI_REGEX.findall(string))
