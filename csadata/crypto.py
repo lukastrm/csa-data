@@ -80,14 +80,15 @@ def download_crypto_price_data(price: str, interval: str, start: Optional[int] =
     if path is None:
         # If no path is specified, use default path in current working directory
         path = os.path.join(os.getcwd(), DEFAULT_DATA_DIRECTORY, _make_file_name(price, interval, start, end))
-    elif os.path.isdir(path):
-        path = os.path.join(path, _make_file_name(price, interval, start, end))
 
     # Check if path directories exist and create them if not
     dirname = os.path.dirname(path)
 
     if not os.path.exists(dirname):
         os.makedirs(dirname)
+
+    if os.path.isdir(path):
+        path = os.path.join(path, _make_file_name(price, interval, start, end))
 
     with open(path, "a", newline="") as file:
         writer = csv.writer(file)
