@@ -128,16 +128,85 @@ def load_crypto_price_data(price: str, interval: str, start: Optional[int] = Non
     :param end: The end time for the data set.
     :param path: The file path for the CSV file in which the downloaded data is saved. If no path is specified, the
     method tries to find the file based on the other parameters in the current working directory.
-    :return: A 2d numpy array with the price data.
+    :return: A 2d NumPy array with the price data.
     """
 
     if path is None:
         # If no path is specified, use default path in current working directory
         path = os.path.join(os.getcwd(), DEFAULT_DATA_DIRECTORY, _make_file_name(price, interval, start, end))
 
-    # Load data as numpy array
+    # Load data as NumPy array
     return loadtxt(path, delimiter=",", usecols=tuple(range(0, 11)))
 
 
 def _make_file_name(price: str, interval: str, start: Optional[int], end: Optional[int]):
     return "_".join([price, interval, str(start), str(end)]) + ".csv"
+
+
+class Candlestick:
+    """
+    Wrapper class for a single candlestick data point. The candlestick attributes of the underlying data point are
+    accessed via computed attributes.
+    """
+
+    def __init__(self, data: ndarray):
+        """
+        :param data: A single candlestick data point as 1d NumPy array.
+        """
+
+        if len(data.shape) != 1 or data.shape[0] < 11:
+            raise ValueError
+
+        self._data: ndarray = data
+
+    def __str__(self):
+        return "Candlestick(open_time={}, open={}, high={}, low={}, close={}, volume={}, close_time={}, " \
+               "quote_asset_volume={}, number_of_trades={}, taker_buy_base_asset_volume={}, " \
+               "taker_buy_quote_asset_volume={})"\
+            .format(self.open_time, self.open, self.high, self.low, self.close, self.volume, self.close_time,
+                    self.quote_asset_volume, self.number_of_trades, self.taker_buy_base_asset_volume,
+                    self.taker_buy_quote_asset_volume)
+
+    @property
+    def open_time(self):
+        return self._data[IDX_OPEN_TIME]
+
+    @property
+    def open(self):
+        return self._data[IDX_OPEN]
+
+    @property
+    def high(self):
+        return self._data[IDX_HIGH]
+
+    @property
+    def low(self):
+        return self._data[IDX_LOW]
+
+    @property
+    def close(self):
+        return self._data[IDX_CLOSE]
+
+    @property
+    def volume(self):
+        return self._data[IDX_VOLUME]
+
+    @property
+    def close_time(self):
+        return self._data[IDX_CLOSE_TIME]
+
+    @property
+    def quote_asset_volume(self):
+        return self._data[IDX_QUOTE_ASSET_VOLUME]
+
+    @property
+    def number_of_trades(self):
+        return self._data[IDX_NUMBER_OF_TRADES]
+
+    @property
+    def taker_buy_base_asset_volume(self):
+        return self._data[IDX_TAKER_BUY_BASE_ASSET_VOLUME]
+
+    @property
+    def taker_buy_quote_asset_volume(self):
+        return self._data[IDX_TAKER_BUY_QUOTE_ASSET_VOLUME]
