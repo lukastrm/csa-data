@@ -124,16 +124,19 @@ def load_crypto_price_data(price: str, interval: str, start: Optional[int] = Non
 
     :param price: The price symbol.
     :param interval: The time interval between data points (time resolution).
-    :param start: The start time for the data set.
-    :param end: The end time for the data set.
+    :param start: The start time for the data set in milliseconds since Epoch.
+    :param end: The end time for the data set in milliseconds since Epoch.
     :param path: The file path for the CSV file in which the downloaded data is saved. If no path is specified, the
-    method tries to find the file based on the other parameters in the current working directory.
+    method tries to find the file based on the other parameters in the current working directory. If only a directory
+    path is given, the method tries to find the file based on the other parameters within that directory.
     :return: A 2d NumPy array with the price data.
     """
 
     if path is None:
         # If no path is specified, use default path in current working directory
         path = os.path.join(os.getcwd(), DEFAULT_DATA_DIRECTORY, _make_file_name(price, interval, start, end))
+    elif os.path.isdir(path):
+        path = os.path.join(path, _make_file_name(price, interval, start, end))
 
     # Load data as NumPy array
     return loadtxt(path, delimiter=",", usecols=tuple(range(0, 11)))

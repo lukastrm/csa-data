@@ -27,7 +27,18 @@ class Tweet:
     A class holding relevant fields which characterize a single Tweet.
     """
 
-    def __init__(self, tweet_dict):
+    def __init__(self, tweet_dict=None):
+        if tweet_dict is None:
+            self.id = None
+            self.time = None
+            self.author_id = None
+            self.like_count = None
+            self.reply_count = None
+            self.retweet_count = None
+            self.quote_count = None
+            self.text = None
+            return
+
         self.id = tweet_dict.get(TWEET_DICT_FIELD_ID)
 
         if self.id is None:
@@ -40,7 +51,9 @@ class Tweet:
         self.retweet_count = tweet_dict[TWEET_DICT_FIELD_PUBLIC_METRICS][TWEET_DICT_FIELD_RETWEET_COUNT]
         self.quote_count = tweet_dict[TWEET_DICT_FIELD_PUBLIC_METRICS][TWEET_DICT_FIELD_QUOTE_COUNT]
         self.text = tweet_dict[TWEET_DICT_FIELD_TEXT]
-        self.emojis = None
+
+    def __str__(self):
+        return str(self.__dict__)
 
 
 class TwitterAPISearch(Iterator[Tweet]):
@@ -64,6 +77,10 @@ class TwitterAPISearch(Iterator[Tweet]):
                 continue
 
 
+def _datetime_to_twitter_iso(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M")
+
+
 class TwitterAPI:
     """
     Twitter API wrapper class.
@@ -72,11 +89,16 @@ class TwitterAPI:
     def __init__(self, bearer_token: Optional[str] = None):
         self.bearer_token = bearer_token if bearer_token is not None else os.environ[ENV_VAR_SEARCHTWEETS_BEARER_TOKEN]
 
-    def search(self, endpoint: str, query: str) -> TwitterAPISearch:
+    def search(self, endpoint: str, query: str, max_requests=None, max_tweets=None, start_time: Optional[int] = None,
+               end_time: Optional[int] = None) -> TwitterAPISearch:
         """
         Perform a call to the Twitter API search endpoint.
         :param endpoint: The endpoint to which the call is made, either recent tweets or full archive search.
         :param query: The Tweet search query.
+        :param max_requests: The maximum amount of requests to perform while searching.
+        :param max_tweets: The maximum amount of Tweets
+        :param start_time: The oldest timestamp from which Tweets are searched (in seconds since Epoch).
+        :param end_time: The newest, most recent timestamp to which Tweets are searched (in seconds since Epoch).
         :return: A TwitterAPISearch iterator object which returns the search results as single Tweet objects.
         """
 
@@ -85,38 +107,58 @@ class TwitterAPI:
             "endpoint": endpoint
         }
 
-        params = gen_request_parameters(query=query, results_per_call=100,
+        start_time_str = None if start_time is None else _datetime_to_twitter_iso(
+            datetime.fromtimestamp(start_time, tz=timezone.utc))
+        end_time_str = None if end_time is None else _datetime_to_twitter_iso(
+            datetime.fromtimestamp(end_time, tz=timezone.utc))
+
+        params = gen_request_parameters(query=query, results_per_call=100, start_time=start_time_str,
+                                        end_time=end_time_str,
                                         tweet_fields="id,created_at,author_id,text,public_metrics")
-        result_stream = ResultStream(request_parameters=params, max_requests=1, max_tweets=100, **search_args)
+        result_stream = ResultStream(request_parameters=params, max_requests=max_requests, max_tweets=max_tweets,
+                                     **search_args)
         return TwitterAPISearch(result_stream)
+
+
+def _check_intervals(dir_intervals: List[int], file_interval: int):
+    prev = sys.maxsize * 2 + 1
+
+    if dir_intervals is None:
+        dir_intervals = []
+    elif len(dir_intervals) > 0:
+        for interval in dir_intervals:
+            if interval >= prev:
+                raise ValueError("Directory time intervals must be descending")
+            elif interval <= 0:
+                raise ValueError("Directory time intervals must be non-negative and non-zero")
+
+            prev = interval
+
+    if len(dir_intervals) > 0 and file_interval >= dir_intervals[-1]:
+        raise ValueError("File time interval must be less than smallest directory time interval")
+    elif file_interval <= 0:
+        raise ValueError("File time interval must be non-negative and non-zero")
+
+
+def _nested_path(time: int, base_path: str, dir_intervals: List[int], file_base_time: int) -> str:
+    path = base_path
+
+    for dir_interval in dir_intervals:
+        path += os.sep + datetime.fromtimestamp(int(time // dir_interval * dir_interval)).astimezone(timezone.utc)\
+            .isoformat()
+
+    path += os.sep + datetime.fromtimestamp(file_base_time).astimezone(timezone.utc).isoformat() + ".csv"
+    return path
 
 
 class TweetCSVWriter:
     def __init__(self, base_path: str, dir_intervals: List[int], file_interval: int):
-        super().__init__()
         self.base_path: str = base_path
 
-        prev = sys.maxsize * 2 + 1
-
-        if dir_intervals is None or len(dir_intervals) == 0:
-            self.dir_intervals = []
-        else:
-            for interval in dir_intervals:
-                if interval >= prev:
-                    raise ValueError("Directory time intervals must be descending")
-                elif interval <= 0:
-                    raise ValueError("Directory time intervals must be non-negative and non-zero")
-
-                prev = interval
-
-            self.dir_intervals: List[int] = dir_intervals
-
-        if file_interval >= dir_intervals[-1]:
-            raise ValueError("File time interval must be less than smallest directory time interval")
-        elif file_interval <= 0:
-            raise ValueError("File time interval must be non-negative and non-zero")
-
+        _check_intervals(dir_intervals, file_interval)
+        self.dir_intervals: List[int] = dir_intervals
         self.file_interval: int = file_interval
+
         self.open_file = None
         self.open_file_base_time = -1
         self.csv_writer = None
@@ -137,14 +179,7 @@ class TweetCSVWriter:
 
             self.open_file_base_time = base_time
 
-            path = self.base_path
-
-            for dir_interval in self.dir_intervals:
-                path += os.sep + datetime.fromtimestamp(int(tweet.time // dir_interval * dir_interval))\
-                    .astimezone(timezone.utc).isoformat()
-
-            path += os.sep + datetime.fromtimestamp(self.open_file_base_time).astimezone(timezone.utc).isoformat() + \
-                    ".csv"
+            path = _nested_path(tweet.time, self.base_path, self.dir_intervals, base_time)
             dirname = os.path.dirname(path)
 
             if not os.path.exists(dirname):
@@ -154,4 +189,80 @@ class TweetCSVWriter:
             self.csv_writer = csv.writer(self.open_file)
 
         self.csv_writer.writerow([tweet.time, tweet.id, tweet.author_id, tweet.like_count, tweet.reply_count,
-                                  tweet.retweet_count, tweet.quote_count, tweet.text, tweet.emojis])
+                                  tweet.retweet_count, tweet.quote_count, tweet.text])
+
+
+class TweetCSVReader(Iterator[Tweet]):
+    def __init__(self, base_path: str, dir_intervals: List[int], file_interval: int, start: int, end: int):
+        self.base_path: str = base_path
+
+        _check_intervals(dir_intervals, file_interval)
+        self.dir_intervals: List[int] = dir_intervals
+        self.file_interval: int = file_interval
+
+        if start is None or end is None:
+            raise ValueError
+
+        self.start: int = start
+        self.end: int = end
+
+        self.open_file = None
+        self.open_file_base_time = int(start // self.file_interval * self.file_interval)
+        self.csv_reader = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.open_file is not None:
+            self.open_file.close()
+
+    def __next__(self):
+        tweet_data = None
+        self._open_file()
+
+        while tweet_data is None:
+            if self.csv_reader is not None:
+                try:
+                    tweet_data = next(self.csv_reader)
+                    break
+                except StopIteration:
+                    pass
+
+            self._open_next_file()
+
+        tweet = Tweet()
+        tweet.time = int(tweet_data[0])
+        tweet.id = tweet_data[1]
+        tweet.author_id = tweet_data[2]
+        tweet.like_count = int(tweet_data[3])
+        tweet.reply_count = int(tweet_data[4])
+        tweet.retweet_count = int(tweet_data[5])
+        tweet.quote_count = int(tweet_data[6])
+        tweet.text = tweet_data[7]
+        return tweet
+
+    def _open_next_file(self):
+        self._close_file()
+        self.open_file_base_time += self.file_interval
+
+        if self.open_file_base_time >= self.end:
+            raise StopIteration
+
+        self._open_file()
+
+    def _close_file(self):
+        if self.open_file is not None:
+            self.open_file.close()
+            self.open_file = None
+            self.csv_reader = None
+
+    def _open_file(self):
+        if self.open_file is not None:
+            return
+
+        path = _nested_path(self.open_file_base_time, self.base_path, self.dir_intervals, self.open_file_base_time)
+
+        if os.path.isfile(path):
+            self.open_file = open(path, "r", newline="")
+            self.csv_reader = csv.reader(self.open_file)
