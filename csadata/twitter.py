@@ -1,9 +1,10 @@
 import os
 import sys
 import csv
+from typing import List, Iterator, Optional, Callable, Tuple
 from datetime import datetime, timezone
-from typing import List, Iterator, Optional
 from dateutil import parser
+from numpy import ndarray, array, zeros
 from searchtweets import gen_request_parameters, ResultStream
 
 ENV_VAR_SEARCHTWEETS_BEARER_TOKEN = "SEARCHTWEETS_BEARER_TOKEN"
@@ -20,6 +21,17 @@ TWEET_DICT_FIELD_RETWEET_COUNT = "retweet_count"
 TWEET_DICT_FIELD_REPLY_COUNT = "reply_count"
 TWEET_DICT_FIELD_LIKE_COUNT = "like_count"
 TWEET_DICT_FIELD_QUOTE_COUNT = "quote_count"
+
+TWEET_TRANSFORMER_TEXT_LENGTH_SHAPE = (1,)
+TWEET_TRANSFORMER_TEXT_LENGTH = lambda tweet: array((len(tweet.text)))
+
+CONFIG_KEY_DIR_INTERVALS = "dir_intervals"
+CONFIG_KEY_FILE_INTERVAL = "file_interval"
+
+CONFIG = {
+    CONFIG_KEY_DIR_INTERVALS: [60 * 60 * 24],
+    CONFIG_KEY_FILE_INTERVAL: 60 * 15
+}
 
 
 class Tweet:
@@ -120,28 +132,8 @@ class TwitterAPI:
         return TwitterAPISearch(result_stream)
 
 
-def _check_intervals(dir_intervals: List[int], file_interval: int):
-    prev = sys.maxsize * 2 + 1
-
-    if dir_intervals is None:
-        dir_intervals = []
-    elif len(dir_intervals) > 0:
-        for interval in dir_intervals:
-            if interval >= prev:
-                raise ValueError("Directory time intervals must be descending")
-            elif interval <= 0:
-                raise ValueError("Directory time intervals must be non-negative and non-zero")
-
-            prev = interval
-
-    if len(dir_intervals) > 0 and file_interval >= dir_intervals[-1]:
-        raise ValueError("File time interval must be less than smallest directory time interval")
-    elif file_interval <= 0:
-        raise ValueError("File time interval must be non-negative and non-zero")
-
-
-def _nested_path(time: int, base_path: str, dir_intervals: List[int], file_base_time: int) -> str:
-    path = base_path
+def _nested_path(time: int, path: str, dir_intervals: List[int], file_base_time: int) -> str:
+    path = path
 
     for dir_interval in dir_intervals:
         path += os.sep + datetime.fromtimestamp(int(time // dir_interval * dir_interval)).astimezone(timezone.utc)\
@@ -151,13 +143,34 @@ def _nested_path(time: int, base_path: str, dir_intervals: List[int], file_base_
     return path
 
 
-class TweetCSVWriter:
-    def __init__(self, base_path: str, dir_intervals: List[int], file_interval: int):
-        self.base_path: str = base_path
+class TweetDataFileStructure:
+    def __init__(self, dir_intervals: Optional[List[int]] = None, file_interval: Optional[int] = None):
+        prev = sys.maxsize * 2 + 1
 
-        _check_intervals(dir_intervals, file_interval)
-        self.dir_intervals: List[int] = dir_intervals
-        self.file_interval: int = file_interval
+        if dir_intervals is not None:
+            for interval in dir_intervals:
+                if interval >= prev:
+                    raise ValueError("Directory time intervals must be descending")
+                elif interval <= 0:
+                    raise ValueError("Directory time intervals must be non-negative and non-zero")
+
+                prev = interval
+
+        self.dir_intervals: List[int] = CONFIG[CONFIG_KEY_DIR_INTERVALS] if dir_intervals is None else dir_intervals
+
+        if file_interval is not None:
+            if len(self.dir_intervals) > 0 and file_interval >= self.dir_intervals[-1]:
+                raise ValueError("File time interval must be less than smallest directory time interval")
+            elif file_interval <= 0:
+                raise ValueError("File time interval must be non-negative and non-zero")
+
+        self.file_interval: int = CONFIG[CONFIG_KEY_FILE_INTERVAL] if file_interval is None else file_interval
+
+
+class TweetCSVWriter:
+    def __init__(self, path: str, file_structure: Optional[TweetDataFileStructure]):
+        self.path: str = path
+        self.fs: TweetDataFileStructure = TweetDataFileStructure() if file_structure is None else file_structure
 
         self.open_file = None
         self.open_file_base_time = -1
@@ -171,7 +184,7 @@ class TweetCSVWriter:
             self.open_file.close()
 
     def write(self, tweet: Tweet):
-        base_time = int(tweet.time // self.file_interval * self.file_interval)
+        base_time = int(tweet.time // self.fs.file_interval * self.fs.file_interval)
 
         if self.open_file_base_time is not base_time:
             if self.open_file is not None:
@@ -179,7 +192,7 @@ class TweetCSVWriter:
 
             self.open_file_base_time = base_time
 
-            path = _nested_path(tweet.time, self.base_path, self.dir_intervals, base_time)
+            path = _nested_path(tweet.time, self.path, self.fs.dir_intervals, base_time)
             dirname = os.path.dirname(path)
 
             if not os.path.exists(dirname):
@@ -193,24 +206,18 @@ class TweetCSVWriter:
 
 
 class TweetCSVReader(Iterator[Tweet]):
-    def __init__(self, base_path: str, dir_intervals: List[int], file_interval: int, start: int, end: int):
-        self.base_path: str = base_path
-
-        _check_intervals(dir_intervals, file_interval)
-        self.dir_intervals: List[int] = dir_intervals
-        self.file_interval: int = file_interval
-
-        if start is None or end is None:
-            raise ValueError
-
+    def __init__(self, path: str, start: int, end: int, file_structure: Optional[TweetDataFileStructure] = None):
+        self.path: str = path
         self.start: int = start
         self.end: int = end
+        self.fs: TweetDataFileStructure = TweetDataFileStructure() if file_structure is None else file_structure
 
         self.open_file = None
-        self.open_file_base_time = int(start // self.file_interval * self.file_interval)
+        self.open_file_base_time = int(start // self.fs.file_interval * self.fs.file_interval)
         self.csv_reader = None
 
     def __enter__(self):
+        self._close_file()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -244,7 +251,7 @@ class TweetCSVReader(Iterator[Tweet]):
 
     def _open_next_file(self):
         self._close_file()
-        self.open_file_base_time += self.file_interval
+        self.open_file_base_time += self.fs.file_interval
 
         if self.open_file_base_time >= self.end:
             raise StopIteration
@@ -261,8 +268,25 @@ class TweetCSVReader(Iterator[Tweet]):
         if self.open_file is not None:
             return
 
-        path = _nested_path(self.open_file_base_time, self.base_path, self.dir_intervals, self.open_file_base_time)
+        path = _nested_path(self.open_file_base_time, self.path, self.fs.dir_intervals, self.open_file_base_time)
 
         if os.path.isfile(path):
             self.open_file = open(path, "r", newline="")
             self.csv_reader = csv.reader(self.open_file)
+
+
+def transform(path: str, start: int, end: int, shape: Tuple[int], transformer: Callable[[Tweet], ndarray],
+              file_structure: Optional[TweetDataFileStructure] = None) -> ndarray:
+    reader_args = dict(path=path, start=start, end=end, file_structure=file_structure)
+
+    with TweetCSVReader(**reader_args) as reader:
+        for num_tweets, _ in enumerate(reader):
+            pass
+
+    data = zeros((num_tweets + 1,) + shape)
+
+    with TweetCSVReader(**reader_args) as reader:
+        for i, tweet in enumerate(reader):
+            data[i] = transformer(tweet)
+
+    return data
