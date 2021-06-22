@@ -1,26 +1,52 @@
-from typing import List, Optional, Tuple, Callable
+from typing import List, Optional, Tuple, Dict
 
 import numpy
 import crypto
 import twitter
 from datetime import datetime, timezone
 
+
 _TWEET_SENTIMENT_TRANSFORMER_SHAPE = (4,)
+
+INTERVAL_15MINUTE = (60 * 15, crypto.INTERVAL_15MINUTE)
+INTERVAL_1HOUR = (60 * 60, crypto.INTERVAL_1HOUR)
+INTERVAL_1DAY = (60 * 60 * 24, crypto.INTERVAL_1DAY)
+
+IDX_BASE_TIME = 0
+IDX_NEGATIVITY = 1
+IDX_NEUTRALITY = 2
+IDX_POSITIVITY = 3
+IDX_NUM_TWEETS = 4
+
+CRYPTO_PRICE_OFFSET = 5
 
 
 def build_sentiment_data_set(start: int,
                              end: int,
-                             interval: int,
-                             crypto_interval: str,
-                             output_path: Optional[str] = None,
-                             twitter_path: Optional[str] = None,
-                             crypto_path: Optional[str] = None,
+                             interval: Tuple[int, str],
+                             tweet_path: Optional[str] = None,
                              tweet_file_structure: Optional[twitter.TweetDataFileStructure] = None,
+                             crypto_path: Optional[str] = None,
                              include_prices: List[str] = crypto.PRICES,
-                             exclude_prices: Optional[List[str]] = None) -> numpy.ndarray:
-    # METHOD INCOMPLETE!
+                             exclude_prices: Optional[List[str]] = None) -> Tuple[numpy.ndarray, Dict[str, int]]:
+    """
+    Returns a joint dataset with sentiment values for a given time interval that are based on the Tweets that have been
+    posted within that interval paired with price data from different cryptocurrencies.
+
+    :param start: The start time for the data set.
+    :param end: The end time for the data set.
+    :param interval: The time interval between two subsequent data points (i.e. the temporal resolution).
+    :param tweet_path: The file path to the root directory of the Tweet data set.
+    :param tweet_file_structure: The file structure of the Tweet data set.
+    :param crypto_path: The file path to the cryptocurrency data set.
+    :param include_prices: A list of price symbols whose related price data is included in the data set, defaults to all
+    known price symbols.
+    :param exclude_prices: A list of price symbols whose related price data is excluded from the data set.
+    :return: A tuple of a 2d NumPy array with the Tweet sentiment and cryptocurrency price data as well as a dictionary
+    containing the mapping of the included cryptocurrency symbols and their respective column indices in the data set.
+    """
     tweet_transform_args = dict(
-        path=twitter_path,
+        path=tweet_path,
         start=start,
         end=end,
         shape=_TWEET_SENTIMENT_TRANSFORMER_SHAPE,
@@ -28,45 +54,69 @@ def build_sentiment_data_set(start: int,
         file_structure=tweet_file_structure
     )
 
+    interval_time = interval[0]
+    interval_symbol = interval[1]
+
+    # Transform the Tweets' text data into sentiment values
     tweet_data = twitter.transform(**tweet_transform_args)
-    tweet_data[:, 0] = tweet_data[:, 0] // interval * interval
 
-    base_time = start
-
-    data = numpy.zeros((numpy.ceil((end - start) / interval).astype(int), 4))
-    i = 0
-
-    while base_time < end:
-        segment = tweet_data[tweet_data[:, 0] == base_time]
-        segment_sum = segment.sum(axis=0)
-        data[i, 0:3] = segment_sum[1:]
-        data[i, 3] = segment.shape[0]
-        base_time += interval
-        i += 1
-
-    # TODO: Mean over tweets within time interval
+    # Transform Tweet times into corresponding time interval base times
+    tweet_data[:, 0] = tweet_data[:, 0] // interval_time * interval_time
 
     price_symbols = include_prices if exclude_prices is None else \
         [price for price in include_prices if price not in exclude_prices]
     num_prices = len(price_symbols)
-    data = numpy.zeros((tweet_data.shape[0], tweet_data.shape[1] + 5 * num_prices))
 
-    prices_dict = {}
+    # Initialize the data array
+    data = numpy.zeros((numpy.ceil((end - start) / interval_time).astype(int),
+                        5 + num_prices * crypto.NUM_CANDLESTICK_FIELDS))
+
+    for i, base_time in enumerate(range(start, end, interval_time)):
+        # TODO: Mean over tweets within time interval
+        segment = tweet_data[tweet_data[:, 0] == base_time]
+
+        data[i, IDX_BASE_TIME] = base_time
+        data[i, IDX_NEGATIVITY:IDX_POSITIVITY + 1] = segment.sum(axis=0)[1:]
+        data[i, IDX_NUM_TWEETS] = segment.shape[0]
+
+    dim_offset = CRYPTO_PRICE_OFFSET
+    price_offsets = {}
 
     for price in price_symbols:
-        crypto.load_crypto_price_data(price=price, interval=crypto_interval, start=start, end=end, path=crypto_path)
+        price_data = crypto.load_crypto_price_data(price=price, interval=interval_symbol, start=start * 1000,
+                                                   end=end * 1000, path=crypto_path)
+        price_dict = {}
+
+        for i in range(price_data.shape[0]):
+            price_dict[int(price_data[i][crypto.IDX_OPEN_TIME] / 1000)] = i
+
+        for i in range(data.shape[0]):
+            candlestick_data_idx = price_dict.get(int(data[i][0]))
+
+            if candlestick_data_idx is None:
+                raise ValueError
+
+            data[i][dim_offset:dim_offset+crypto.NUM_CANDLESTICK_FIELDS] = price_data[candlestick_data_idx]
+
+        price_offsets[price] = dim_offset
+        dim_offset += crypto.NUM_CANDLESTICK_FIELDS
+
+    return data, price_offsets
 
 
 def _tweet_sentiment_transformer(tweet: twitter.Tweet):
-    return numpy.array([tweet.time, 0, 0, 0]) # TODO: Replace with actual sentiment values
+    return numpy.array([tweet.time, 0, 0, 0])  # TODO: Replace with actual sentiment values
 
 
 def _test_method():
-    twitter_path = "/home/lukastrm/Documents/studies/crypto-sa-data/examples/data/"
+    twitter_path = "/Users/lukastrm/Documents/studies/csa-data/data-set/twitter-test"
+    crypto_path = "/Users/lukastrm/Documents/studies/csa-data/data-set/dogecoin"
+
     start = int(datetime(2021, 6, 1, 0, 0, 0, tzinfo=timezone.utc).timestamp())  # 06/01/2021 00:00:00
     end = int(datetime(2021, 6, 6, 23, 59, 59, tzinfo=timezone.utc).timestamp())  # 06/06/2021 23:59:59
-    build_sentiment_data_set(start=start, end=end, interval=15 * 60, crypto_interval=crypto.INTERVAL_15MINUTE,
-                             twitter_path=twitter_path)
+
+    build_sentiment_data_set(start=start, end=end, interval=INTERVAL_15MINUTE, tweet_path=twitter_path,
+                             crypto_path=crypto_path, include_prices=[crypto.PRICE_DOGECOIN_USDT, crypto.PRICE_BITCOIN_USDT])
 
 
 if __name__ == "__main__":

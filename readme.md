@@ -6,6 +6,23 @@ in 2021.
 
 ## Module Contents
 
+### Package `csadata.core`
+
+Use the `build_sentiment_data_set(start, end, interval, ...)` method to build a joint data set of
+Tweet sentiment and cryptocurrency price data. The method returns a 2d-NumPy array with the following
+columns:
+
+- base time:
+- negativity:
+- neutrality:
+- positivity:
+- number of Tweets:
+
+For each cryptocurrency that is added to the data set the following columns are appended:
+
+tbd.
+
+
 ### Package `csadata.twitter`
 
 tbd.
