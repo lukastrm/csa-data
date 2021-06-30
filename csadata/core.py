@@ -3,6 +3,7 @@ from typing import List, Optional, Tuple, Dict
 import numpy
 import crypto
 import twitter
+import sentiment
 from datetime import datetime, timezone
 
 
@@ -45,12 +46,14 @@ def build_sentiment_data_set(start: int,
     :return: A tuple of a 2d NumPy array with the Tweet sentiment and cryptocurrency price data as well as a dictionary
     containing the mapping of the included cryptocurrency symbols and their respective column indices in the data set.
     """
+    analyzer = sentiment.SentimentAnalyzer()
+
     tweet_transform_args = dict(
         path=tweet_path,
         start=start,
         end=end,
         shape=_TWEET_SENTIMENT_TRANSFORMER_SHAPE,
-        transformer=_tweet_sentiment_transformer,
+        transformer=lambda tweet: _tweet_sentiment_transformer(tweet, analyzer),
         file_structure=tweet_file_structure
     )
 
@@ -104,8 +107,9 @@ def build_sentiment_data_set(start: int,
     return data, price_offsets
 
 
-def _tweet_sentiment_transformer(tweet: twitter.Tweet):
-    return numpy.array([tweet.time, 0, 0, 0])  # TODO: Replace with actual sentiment values
+def _tweet_sentiment_transformer(tweet: twitter.Tweet, analyzer: sentiment.SentimentAnalyzer):
+    s = analyzer.classify_sentiment(tweet.text)
+    return numpy.array([tweet.time, s[0], s[1], s[2]])  # TODO: Replace with actual sentiment values
 
 
 def _test_method():
@@ -115,8 +119,11 @@ def _test_method():
     start = int(datetime(2021, 6, 1, 0, 0, 0, tzinfo=timezone.utc).timestamp())  # 06/01/2021 00:00:00
     end = int(datetime(2021, 6, 6, 23, 59, 59, tzinfo=timezone.utc).timestamp())  # 06/06/2021 23:59:59
 
-    build_sentiment_data_set(start=start, end=end, interval=INTERVAL_15MINUTE, tweet_path=twitter_path,
-                             crypto_path=crypto_path, include_prices=[crypto.PRICE_DOGECOIN_USDT, crypto.PRICE_BITCOIN_USDT])
+    x = build_sentiment_data_set(start=start, end=end, interval=INTERVAL_15MINUTE, tweet_path=twitter_path,
+                             crypto_path=crypto_path, include_prices=crypto.PRICES[:6], )
+
+    with open("test.npy", "wb") as f:
+        numpy.save(f, x[0])
 
 
 if __name__ == "__main__":

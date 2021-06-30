@@ -9,18 +9,30 @@ in 2021.
 ### Package `csadata.core`
 
 Use the `build_sentiment_data_set(start, end, interval, ...)` method to build a joint data set of
-Tweet sentiment and cryptocurrency price data. The method returns a 2d-NumPy array with the following
-columns:
+Tweet sentiment and cryptocurrency price data. The method returns a 2d-NumPy array with rows corresponding to single
+time intervals as well as the following column scheme:
 
-- base time:
-- negativity:
-- neutrality:
-- positivity:
-- number of Tweets:
+- base time: The start time of a single data point time interval in seconds since Epoch.
+- negativity: The negativity score (probability of negative sentiment) of the Tweets in the time intervals.
+- neutrality: The neutrality score (probability of neutral sentiment) of the Tweets in the time intervals.
+- positivity: The positivity score (probability of positive sentiment) of the Tweets in the time intervals.
+- number of Tweets: The total amount of Tweets in the time intervals.
 
 For each cryptocurrency that is added to the data set the following columns are appended:
 
-tbd.
+- open time
+- open
+- high
+- low
+- close
+- volume
+- close time
+- quote asset volume
+- number of trades
+- taker buy base asset volume
+- taker buy quote asset volume
+
+Please refer to the [Binance API](https://binance-docs.github.io/apidocs/) for more information on these fields.
 
 
 ### Package `csadata.twitter`
