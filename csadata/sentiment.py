@@ -20,9 +20,7 @@ class SentimentAnalyzer:
         self.preprocessor: Callable[[str], str] = preprocessor
         model = "cardiffnlp/twitter-roberta-base-sentiment"
         self.tokenizer = AutoTokenizer.from_pretrained(model)
-        self.tokenizer.save_pretrained(model)
         self.model = AutoModelForSequenceClassification.from_pretrained(model)
-        self.model.save_pretrained(model)
 
     def classify_sentiment(self, text) -> ndarray:
         if self.preprocessor is not None:
