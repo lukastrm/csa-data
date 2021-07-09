@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from dateutil import parser
 from numpy import ndarray, array, zeros
 from searchtweets import gen_request_parameters, ResultStream
+from Levenshtein import distance
 
 ENV_VAR_SEARCHTWEETS_BEARER_TOKEN = "SEARCHTWEETS_BEARER_TOKEN"
 
@@ -273,6 +274,87 @@ class TweetCSVReader(Iterator[Tweet]):
         if os.path.isfile(path):
             self.open_file = open(path, "r", newline="")
             self.csv_reader = csv.reader(self.open_file)
+
+
+class TweetDuplicateFilter:
+    def __init__(self, batch_size: int = 100, dissimilarity_threshold: float = 0.1):
+        self.batch_size: int = batch_size
+        self.dissimilarity_threshold: float = dissimilarity_threshold
+        self._tweets: List[Optional[Tweet]] = [None] * batch_size
+        self._i: int = 0
+        self._eliminated = False
+
+    def feed(self, tweet: Tweet) -> bool:
+        if self._eliminated:
+            raise Exception
+
+        self._tweets[self._i] = tweet
+        self._i += 1
+
+        if self._i == self.batch_size:
+            self._eliminate()
+            return True
+        else:
+            return False
+
+    def pull(self) -> Optional[Tweet]:
+        if not self._eliminated:
+            raise Exception
+
+        tweet = None
+
+        while tweet is None:
+            tweet = self._tweets[self._i]
+            self._i += 1
+
+            if self._i == self.batch_size:
+                self._eliminated = False
+                return tweet
+
+        return tweet
+
+    def reset(self) -> None:
+        self._eliminated = False
+        self._i = 0
+
+    def _eliminate(self) -> None:
+        for i in range(self._i):
+            tweet_0 = self._tweets[i]
+
+            if tweet_0 is None:
+                continue
+
+            for j in range(i + 1, self._i):
+                tweet_1 = self._tweets[j]
+
+                if tweet_1 is None:
+                    continue
+
+                tweet_text_0 = self._tweets[i].text
+                tweet_text_1 = self._tweets[j].text
+                dissimilarity = (distance(tweet_text_0, tweet_text_1) / max(len(tweet_text_0), len(tweet_text_1)))
+
+                if dissimilarity < self.dissimilarity_threshold:
+                    self._tweets[i] = None
+                    self._tweets[j] = None
+                    continue
+
+        self._eliminated = True
+        self._i = 0
+
+
+class TweetDuplicateEliminator:
+    def __init__(self, in_path: str, out_path: str, start: int, end: int, iterations: int = 1,
+                 in_file_structure: Optional[TweetDataFileStructure] = None,
+                 out_file_structure: Optional[TweetDataFileStructure] = None):
+        self.reader: TweetCSVReader = TweetCSVReader(path=in_path, start=start, end=end,
+                                                     file_structure=in_file_structure)
+        self.writer: TweetCSVWriter = TweetCSVWriter(path=out_path, file_structure=out_file_structure)
+        self.out_path: str = self.out_path
+        self.iterations: int = iterations
+
+    def eliminate(self) -> None:
+        pass  # TODO: Add method
 
 
 def transform(path: str, start: int, end: int, shape: Tuple[int], transformer: Callable[[Tweet], ndarray],

@@ -109,7 +109,7 @@ def build_sentiment_data_set(start: int,
 
 def _tweet_sentiment_transformer(tweet: twitter.Tweet, analyzer: sentiment.SentimentAnalyzer):
     s = analyzer.classify_sentiment(tweet.text)
-    return numpy.array([tweet.time, s[0], s[1], s[2]])  # TODO: Replace with actual sentiment values
+    return numpy.array([tweet.time, s[0], s[1], s[2]])
 
 
 def _test_method():
