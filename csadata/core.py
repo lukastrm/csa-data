@@ -1,9 +1,9 @@
 from typing import List, Optional, Tuple, Dict
 
 import numpy
-import crypto
-import twitter
-import sentiment
+import csadata.crypto as crypto
+import csadata.twitter as twitter
+import csadata.sentiment as sentiment
 
 
 _TWEET_SENTIMENT_TRANSFORMER_SHAPE = (5,)
