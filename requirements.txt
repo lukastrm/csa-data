@@ -24,3 +24,4 @@ yarl==1.6.3
 transformers==4.6.1
 torch==1.8.1
 scipy==1.7.0
+levenshtein~=0.12.0

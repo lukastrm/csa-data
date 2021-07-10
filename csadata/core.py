@@ -4,10 +4,9 @@ import numpy
 import crypto
 import twitter
 import sentiment
-from datetime import datetime, timezone
 
 
-_TWEET_SENTIMENT_TRANSFORMER_SHAPE = (4,)
+_TWEET_SENTIMENT_TRANSFORMER_SHAPE = (5,)
 
 INTERVAL_15MINUTE = (60 * 15, crypto.INTERVAL_15MINUTE)
 INTERVAL_1HOUR = (60 * 60, crypto.INTERVAL_1HOUR)
@@ -75,11 +74,16 @@ def build_sentiment_data_set(start: int,
                         5 + num_prices * crypto.NUM_CANDLESTICK_FIELDS))
 
     for i, base_time in enumerate(range(start, end, interval_time)):
-        # TODO: Mean over tweets within time interval
+        # Extract Tweet data from the current time interval
         segment = tweet_data[tweet_data[:, 0] == base_time]
 
+        # Weight Tweet sentiments
+        likes = segment[:, 4]
+        segment[:, 1:4] = segment[:, 1:4] * likes[:, None]
+
+        # Assign values to data array and normalize time interval sentiment
         data[i, IDX_BASE_TIME] = base_time
-        data[i, IDX_NEGATIVITY:IDX_POSITIVITY + 1] = segment.sum(axis=0)[1:]
+        data[i, IDX_NEGATIVITY:IDX_POSITIVITY + 1] = segment[:, 1:4].sum(axis=0) / likes.sum()
         data[i, IDX_NUM_TWEETS] = segment.shape[0]
 
     dim_offset = CRYPTO_PRICE_OFFSET
@@ -109,22 +113,4 @@ def build_sentiment_data_set(start: int,
 
 def _tweet_sentiment_transformer(tweet: twitter.Tweet, analyzer: sentiment.SentimentAnalyzer):
     s = analyzer.classify_sentiment(tweet.text)
-    return numpy.array([tweet.time, s[0], s[1], s[2]])
-
-
-def _test_method():
-    twitter_path = "/Users/lukastrm/Documents/studies/csa-data/data-set/twitter-test"
-    crypto_path = "/Users/lukastrm/Documents/studies/csa-data/data-set/dogecoin"
-
-    start = int(datetime(2021, 6, 1, 0, 0, 0, tzinfo=timezone.utc).timestamp())  # 06/01/2021 00:00:00
-    end = int(datetime(2021, 6, 6, 23, 59, 59, tzinfo=timezone.utc).timestamp())  # 06/06/2021 23:59:59
-
-    x = build_sentiment_data_set(start=start, end=end, interval=INTERVAL_15MINUTE, tweet_path=twitter_path,
-                             crypto_path=crypto_path, include_prices=crypto.PRICES[:6], )
-
-    with open("test.npy", "wb") as f:
-        numpy.save(f, x[0])
-
-
-if __name__ == "__main__":
-    _test_method()
+    return numpy.array([tweet.time, s[0], s[1], s[2], max(tweet.like_count, 1)])
