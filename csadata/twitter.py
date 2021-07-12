@@ -169,7 +169,7 @@ class TweetDataFileStructure:
 
 
 class TweetCSVWriter:
-    def __init__(self, path: str, file_structure: Optional[TweetDataFileStructure]):
+    def __init__(self, path: str, file_structure: Optional[TweetDataFileStructure] = None):
         self.path: str = path
         self.fs: TweetDataFileStructure = TweetDataFileStructure() if file_structure is None else file_structure
 
