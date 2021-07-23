@@ -3,14 +3,11 @@ from typing import List, Optional, Tuple, Dict
 import numpy
 import csadata.crypto as crypto
 import csadata.twitter as twitter
-import csadata.sentiment as sentiment
 
 
-_TWEET_SENTIMENT_TRANSFORMER_SHAPE = (5,)
-
-INTERVAL_15MINUTE = (60 * 15, crypto.INTERVAL_15MINUTE)
-INTERVAL_1HOUR = (60 * 60, crypto.INTERVAL_1HOUR)
-INTERVAL_1DAY = (60 * 60 * 24, crypto.INTERVAL_1DAY)
+INTERVAL_15MINUTE = (60 * 15, crypto.Client.KLINE_INTERVAL_15MINUTE)
+INTERVAL_1HOUR = (60 * 60, crypto.Client.KLINE_INTERVAL_1HOUR)
+INTERVAL_1DAY = (60 * 60 * 24, crypto.Client.KLINE_INTERVAL_1DAY)
 
 IDX_BASE_TIME = 0
 IDX_NEGATIVITY = 1
@@ -45,22 +42,27 @@ def build_sentiment_data_set(start: int,
     :return: A tuple of a 2d NumPy array with the Tweet sentiment and cryptocurrency price data as well as a dictionary
     containing the mapping of the included cryptocurrency symbols and their respective column indices in the data set.
     """
-    analyzer = sentiment.SentimentAnalyzer()
-
-    tweet_transform_args = dict(
+    tweet_reader_args = dict(
         path=tweet_path,
         start=start,
         end=end,
-        shape=_TWEET_SENTIMENT_TRANSFORMER_SHAPE,
-        transformer=lambda tweet: _tweet_sentiment_transformer(tweet, analyzer),
         file_structure=tweet_file_structure
     )
 
     interval_time = interval[0]
     interval_symbol = interval[1]
 
-    # Transform the Tweets' text data into sentiment values
-    tweet_data = twitter.transform(**tweet_transform_args)
+    with twitter.TweetCSVReader(scan_only=True, **tweet_reader_args) as reader:
+        for num_tweets, _ in enumerate(reader):
+            pass
+
+    tweet_data = numpy.zeros((num_tweets + 1, 5))
+
+    with twitter.TweetCSVReader(include_sentiment=True, **tweet_reader_args) as reader:
+        for i, tweet in enumerate(reader):
+            tweet_data[i, 0] = tweet.time
+            tweet_data[i, 1:4] = tweet.sentiment
+            tweet_data[i, 4] = max(tweet.like_count, 1)
 
     # Transform Tweet times into corresponding time interval base times
     tweet_data[:, 0] = tweet_data[:, 0] // interval_time * interval_time
@@ -109,8 +111,3 @@ def build_sentiment_data_set(start: int,
         dim_offset += crypto.NUM_CANDLESTICK_FIELDS
 
     return data, price_offsets
-
-
-def _tweet_sentiment_transformer(tweet: twitter.Tweet, analyzer: sentiment.SentimentAnalyzer):
-    s = analyzer.classify_sentiment(tweet.text)
-    return numpy.array([tweet.time, s[0], s[1], s[2], max(tweet.like_count, 1)])

@@ -1,12 +1,13 @@
 import os
 import sys
 import csv
-from typing import List, Iterator, Optional, Callable, Tuple
+from typing import List, Iterator, Optional
 from datetime import datetime, timezone
 from dateutil import parser
 from numpy import ndarray, array, zeros
 from searchtweets import gen_request_parameters, ResultStream
 from Levenshtein import distance
+from csadata.sentiment import SentimentAnalyzer
 
 ENV_VAR_SEARCHTWEETS_BEARER_TOKEN = "SEARCHTWEETS_BEARER_TOKEN"
 
@@ -22,9 +23,6 @@ TWEET_DICT_FIELD_RETWEET_COUNT = "retweet_count"
 TWEET_DICT_FIELD_REPLY_COUNT = "reply_count"
 TWEET_DICT_FIELD_LIKE_COUNT = "like_count"
 TWEET_DICT_FIELD_QUOTE_COUNT = "quote_count"
-
-TWEET_TRANSFORMER_TEXT_LENGTH_SHAPE = (1,)
-TWEET_TRANSFORMER_TEXT_LENGTH = lambda tweet: array((len(tweet.text)))
 
 CONFIG_KEY_DIR_INTERVALS = "dir_intervals"
 CONFIG_KEY_FILE_INTERVAL = "file_interval"
@@ -64,7 +62,7 @@ class Tweet:
             self.quote_count = tweet_dict[TWEET_DICT_FIELD_PUBLIC_METRICS][TWEET_DICT_FIELD_QUOTE_COUNT]
             self.text = tweet_dict[TWEET_DICT_FIELD_TEXT]
 
-        self.sentiment: Optional[List[float]] = None
+        self.sentiment: Optional[ndarray] = None
 
     def __str__(self):
         return str(self.__dict__)
@@ -205,8 +203,8 @@ class TweetCSVWriter:
             self.open_file = open(path, "a", newline="")
             self.csv_writer = csv.writer(self.open_file)
 
-        row = [tweet.time, tweet.id, tweet.author_id, tweet.like_count, tweet.reply_count,
-                                  tweet.retweet_count, tweet.quote_count, tweet.text]
+        row = [tweet.time, tweet.id, tweet.author_id, tweet.like_count, tweet.reply_count, tweet.retweet_count,
+               tweet.quote_count, tweet.text]
 
         if self.include_sentiment:
             sentiment = [0, 0, 0] if tweet.sentiment is None else tweet.sentiment
@@ -217,11 +215,12 @@ class TweetCSVWriter:
 
 class TweetCSVReader(Iterator[Tweet]):
     def __init__(self, path: str, start: int, end: int, file_structure: Optional[TweetDataFileStructure] = None,
-                 include_sentiment: bool = False):
+                 scan_only: bool = False, include_sentiment: bool = False):
         self.path: str = path
         self.start: int = start
         self.end: int = end
         self.fs: TweetDataFileStructure = TweetDataFileStructure() if file_structure is None else file_structure
+        self.scan_only: bool = scan_only
         self.include_sentiment: bool = include_sentiment
 
         self.open_file = None
@@ -250,6 +249,9 @@ class TweetCSVReader(Iterator[Tweet]):
 
             self._open_next_file()
 
+        if self.scan_only:
+            return None
+
         tweet = Tweet()
         tweet.time = int(tweet_data[0])
         tweet.id = tweet_data[1]
@@ -262,9 +264,9 @@ class TweetCSVReader(Iterator[Tweet]):
 
         if self.include_sentiment:
             if len(tweet_data) == 11:
-                tweet.sentiment = [int(tweet_data[8]), int(tweet_data[9]), int(tweet_data[10])]
+                tweet.sentiment = array([int(tweet_data[8]), int(tweet_data[9]), int(tweet_data[10])])
             else:
-                tweet.sentiment = [0, 0, 0]
+                tweet.sentiment = zeros(3)
 
         return tweet
 
@@ -371,21 +373,12 @@ class TweetDuplicateFilter:
         self._i = 0
 
 
-def transform(path: str, start: int, end: int, shape: Tuple[int], transformer: Callable[[Tweet], ndarray],
-              file_structure: Optional[TweetDataFileStructure] = None) -> ndarray:
-    reader_args = dict(path=path, start=start, end=end, file_structure=file_structure)
+class TweetSentimentAnalyzer:
+    def __init__(self, analyzer: SentimentAnalyzer):
+        self.analyzer: SentimentAnalyzer = analyzer
 
-    with TweetCSVReader(**reader_args) as reader:
-        for num_tweets, _ in enumerate(reader):
-            pass
-
-    data = zeros((num_tweets + 1,) + shape)
-
-    with TweetCSVReader(**reader_args) as reader:
-        for i, tweet in enumerate(reader):
-            data[i] = transformer(tweet)
-
-    return data
+    def analyze(self, tweet: Tweet):
+        tweet.sentiment = self.analyzer.classify_sentiment(tweet.text)
 
 
 def preprocess_text(tweet: Tweet):
