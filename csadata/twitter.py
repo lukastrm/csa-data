@@ -50,20 +50,21 @@ class Tweet:
             self.retweet_count = None
             self.quote_count = None
             self.text = None
-            return
+        else:
+            self.id = tweet_dict.get(TWEET_DICT_FIELD_ID)
 
-        self.id = tweet_dict.get(TWEET_DICT_FIELD_ID)
+            if self.id is None:
+                raise TypeError
 
-        if self.id is None:
-            raise TypeError
+            self.time = int(parser.isoparse(tweet_dict[TWEET_DICT_FIELD_CREATED_AT]).timestamp())
+            self.author_id = tweet_dict[TWEET_DICT_FIELD_AUTHOR_ID]
+            self.like_count = tweet_dict[TWEET_DICT_FIELD_PUBLIC_METRICS][TWEET_DICT_FIELD_LIKE_COUNT]
+            self.reply_count = tweet_dict[TWEET_DICT_FIELD_PUBLIC_METRICS][TWEET_DICT_FIELD_REPLY_COUNT]
+            self.retweet_count = tweet_dict[TWEET_DICT_FIELD_PUBLIC_METRICS][TWEET_DICT_FIELD_RETWEET_COUNT]
+            self.quote_count = tweet_dict[TWEET_DICT_FIELD_PUBLIC_METRICS][TWEET_DICT_FIELD_QUOTE_COUNT]
+            self.text = tweet_dict[TWEET_DICT_FIELD_TEXT]
 
-        self.time = int(parser.isoparse(tweet_dict[TWEET_DICT_FIELD_CREATED_AT]).timestamp())
-        self.author_id = tweet_dict[TWEET_DICT_FIELD_AUTHOR_ID]
-        self.like_count = tweet_dict[TWEET_DICT_FIELD_PUBLIC_METRICS][TWEET_DICT_FIELD_LIKE_COUNT]
-        self.reply_count = tweet_dict[TWEET_DICT_FIELD_PUBLIC_METRICS][TWEET_DICT_FIELD_REPLY_COUNT]
-        self.retweet_count = tweet_dict[TWEET_DICT_FIELD_PUBLIC_METRICS][TWEET_DICT_FIELD_RETWEET_COUNT]
-        self.quote_count = tweet_dict[TWEET_DICT_FIELD_PUBLIC_METRICS][TWEET_DICT_FIELD_QUOTE_COUNT]
-        self.text = tweet_dict[TWEET_DICT_FIELD_TEXT]
+        self.sentiment: Optional[List[float]] = None
 
     def __str__(self):
         return str(self.__dict__)
@@ -125,7 +126,7 @@ class TwitterAPI:
         end_time_str = None if end_time is None else _datetime_to_twitter_iso(
             datetime.fromtimestamp(end_time, tz=timezone.utc))
 
-        params = gen_request_parameters(query=query, results_per_call=100, start_time=start_time_str,
+        params = gen_request_parameters(query=query, results_per_call=500, start_time=start_time_str,
                                         end_time=end_time_str,
                                         tweet_fields="id,created_at,author_id,text,public_metrics")
         result_stream = ResultStream(request_parameters=params, max_requests=max_requests, max_tweets=max_tweets,
@@ -169,9 +170,11 @@ class TweetDataFileStructure:
 
 
 class TweetCSVWriter:
-    def __init__(self, path: str, file_structure: Optional[TweetDataFileStructure] = None):
+    def __init__(self, path: str, file_structure: Optional[TweetDataFileStructure] = None,
+                 include_sentiment: bool = False):
         self.path: str = path
         self.fs: TweetDataFileStructure = TweetDataFileStructure() if file_structure is None else file_structure
+        self.include_sentiment: bool = include_sentiment
 
         self.open_file = None
         self.open_file_base_time = -1
@@ -202,16 +205,24 @@ class TweetCSVWriter:
             self.open_file = open(path, "a", newline="")
             self.csv_writer = csv.writer(self.open_file)
 
-        self.csv_writer.writerow([tweet.time, tweet.id, tweet.author_id, tweet.like_count, tweet.reply_count,
-                                  tweet.retweet_count, tweet.quote_count, tweet.text])
+        row = [tweet.time, tweet.id, tweet.author_id, tweet.like_count, tweet.reply_count,
+                                  tweet.retweet_count, tweet.quote_count, tweet.text]
+
+        if self.include_sentiment:
+            sentiment = [0, 0, 0] if tweet.sentiment is None else tweet.sentiment
+            row.extend(sentiment)
+
+        self.csv_writer.writerow(row)
 
 
 class TweetCSVReader(Iterator[Tweet]):
-    def __init__(self, path: str, start: int, end: int, file_structure: Optional[TweetDataFileStructure] = None):
+    def __init__(self, path: str, start: int, end: int, file_structure: Optional[TweetDataFileStructure] = None,
+                 include_sentiment: bool = False):
         self.path: str = path
         self.start: int = start
         self.end: int = end
         self.fs: TweetDataFileStructure = TweetDataFileStructure() if file_structure is None else file_structure
+        self.include_sentiment: bool = include_sentiment
 
         self.open_file = None
         self.open_file_base_time = int(start // self.fs.file_interval * self.fs.file_interval)
@@ -248,6 +259,13 @@ class TweetCSVReader(Iterator[Tweet]):
         tweet.retweet_count = int(tweet_data[5])
         tweet.quote_count = int(tweet_data[6])
         tweet.text = tweet_data[7]
+
+        if self.include_sentiment:
+            if len(tweet_data) == 11:
+                tweet.sentiment = [int(tweet_data[8]), int(tweet_data[9]), int(tweet_data[10])]
+            else:
+                tweet.sentiment = [0, 0, 0]
+
         return tweet
 
     def _open_next_file(self):
@@ -277,12 +295,16 @@ class TweetCSVReader(Iterator[Tweet]):
 
 
 class TweetDuplicateFilter:
-    def __init__(self, batch_size: int = 100, dissimilarity_threshold: float = 0.1):
+    def __init__(self, batch_size: int = 100, dissimilarity_threshold: float = 0.1, capacity: int = 0):
         self.batch_size: int = batch_size
         self.dissimilarity_threshold: float = dissimilarity_threshold
-        self._tweets: List[Optional[Tweet]] = [None] * batch_size
+        self._tweets: List[Optional[Tweet]] = [None] * (batch_size if capacity == 0 or capacity < batch_size else
+                                                        capacity)
         self._i: int = 0
         self._eliminated = False
+
+        self.processed_tweets: int = 0
+        self.eliminated_tweets: int = 0
 
     def feed(self, tweet: Tweet) -> bool:
         if self._eliminated:
@@ -290,6 +312,8 @@ class TweetDuplicateFilter:
 
         self._tweets[self._i] = tweet
         self._i += 1
+
+        self.processed_tweets += 1
 
         if self._i == self.batch_size:
             self._eliminate()
@@ -299,7 +323,7 @@ class TweetDuplicateFilter:
 
     def pull(self) -> Optional[Tweet]:
         if not self._eliminated:
-            raise Exception
+            return None
 
         tweet = None
 
@@ -309,6 +333,7 @@ class TweetDuplicateFilter:
 
             if self._i == self.batch_size:
                 self._eliminated = False
+                self._i = 0
                 return tweet
 
         return tweet
@@ -316,6 +341,8 @@ class TweetDuplicateFilter:
     def reset(self) -> None:
         self._eliminated = False
         self._i = 0
+        self.processed_tweets = 0
+        self.eliminated_tweets = 0
 
     def _eliminate(self) -> None:
         for i in range(self._i):
@@ -330,31 +357,18 @@ class TweetDuplicateFilter:
                 if tweet_1 is None:
                     continue
 
-                tweet_text_0 = self._tweets[i].text
-                tweet_text_1 = self._tweets[j].text
+                tweet_text_0 = tweet_0.text
+                tweet_text_1 = tweet_1.text
                 dissimilarity = (distance(tweet_text_0, tweet_text_1) / max(len(tweet_text_0), len(tweet_text_1)))
 
                 if dissimilarity < self.dissimilarity_threshold:
                     self._tweets[i] = None
                     self._tweets[j] = None
-                    continue
+                    self.eliminated_tweets += 2
+                    break
 
         self._eliminated = True
         self._i = 0
-
-
-class TweetDuplicateEliminator:
-    def __init__(self, in_path: str, out_path: str, start: int, end: int, iterations: int = 1,
-                 in_file_structure: Optional[TweetDataFileStructure] = None,
-                 out_file_structure: Optional[TweetDataFileStructure] = None):
-        self.reader: TweetCSVReader = TweetCSVReader(path=in_path, start=start, end=end,
-                                                     file_structure=in_file_structure)
-        self.writer: TweetCSVWriter = TweetCSVWriter(path=out_path, file_structure=out_file_structure)
-        self.out_path: str = self.out_path
-        self.iterations: int = iterations
-
-    def eliminate(self) -> None:
-        pass  # TODO: Add method
 
 
 def transform(path: str, start: int, end: int, shape: Tuple[int], transformer: Callable[[Tweet], ndarray],
@@ -372,3 +386,14 @@ def transform(path: str, start: int, end: int, shape: Tuple[int], transformer: C
             data[i] = transformer(tweet)
 
     return data
+
+
+def preprocess_text(tweet: Tweet):
+    tokens = []
+
+    for token in tweet.text.split(" "):
+        token = '@user' if token.startswith('@') and len(token) > 1 else token
+        token = 'http' if token.startswith('http') else token
+        tokens.append(token)
+
+    tweet.text = " ".join(tokens)

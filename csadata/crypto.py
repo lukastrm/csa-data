@@ -49,10 +49,6 @@ PRICES = [
     PRICE_SOLANA_USDT, PRICE_ETHEREUM_CLASSIC_USDT, PRICE_VECHAIN_USDT
 ]
 
-INTERVAL_1HOUR = Client.KLINE_INTERVAL_1HOUR
-INTERVAL_1DAY = Client.KLINE_INTERVAL_1DAY
-INTERVAL_15MINUTE = Client.KLINE_INTERVAL_15MINUTE
-
 
 def download_crypto_price_data(price: str, interval: str, start: Optional[int] = None, end: Optional[int] = None,
                                api_key: Optional[str] = None, path: str = None) -> None:
