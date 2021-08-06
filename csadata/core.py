@@ -5,6 +5,8 @@ import csadata.crypto as crypto
 import csadata.twitter as twitter
 
 
+INTERVAL_1MINUTE = (60, crypto.Client.KLINE_INTERVAL_1MINUTE)
+INTERVAL_5MINUTE = (60 * 5, crypto.Client.KLINE_INTERVAL_5MINUTE)
 INTERVAL_15MINUTE = (60 * 15, crypto.Client.KLINE_INTERVAL_15MINUTE)
 INTERVAL_1HOUR = (60 * 60, crypto.Client.KLINE_INTERVAL_1HOUR)
 INTERVAL_1DAY = (60 * 60 * 24, crypto.Client.KLINE_INTERVAL_1DAY)
@@ -85,11 +87,13 @@ def build_sentiment_data_set(start: int,
 
         # Assign values to data array and normalize time interval sentiment
         data[i, IDX_BASE_TIME] = base_time
-        data[i, IDX_NEGATIVITY:IDX_POSITIVITY + 1] = segment[:, 1:4].sum(axis=0) / likes.sum()
+        data[i, IDX_NEGATIVITY:IDX_POSITIVITY + 1] = segment[:, 1:4].sum(axis=0) / max(likes.sum(), 1)
         data[i, IDX_NUM_TWEETS] = segment.shape[0]
 
     dim_offset = CRYPTO_PRICE_OFFSET
     price_offsets = {}
+
+    invalid_indices = []
 
     for price in price_symbols:
         price_data = crypto.load_crypto_price_data(price=price, interval=interval_symbol, start=start * 1000,
@@ -103,11 +107,14 @@ def build_sentiment_data_set(start: int,
             candlestick_data_idx = price_dict.get(int(data[i][0]))
 
             if candlestick_data_idx is None:
-                raise ValueError
+                invalid_indices.append(i)
+                print(f"Missing price data for index {i}, price {price} at base time {int(data[i][0])}")
+                continue
 
             data[i][dim_offset:dim_offset+crypto.NUM_CANDLESTICK_FIELDS] = price_data[candlestick_data_idx]
 
         price_offsets[price] = dim_offset
         dim_offset += crypto.NUM_CANDLESTICK_FIELDS
 
+    numpy.delete(data, numpy.unique(invalid_indices), axis=0)
     return data, price_offsets

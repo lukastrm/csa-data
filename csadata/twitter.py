@@ -264,7 +264,7 @@ class TweetCSVReader(Iterator[Tweet]):
 
         if self.include_sentiment:
             if len(tweet_data) == 11:
-                tweet.sentiment = array([int(tweet_data[8]), int(tweet_data[9]), int(tweet_data[10])])
+                tweet.sentiment = array([float(tweet_data[8]), float(tweet_data[9]), float(tweet_data[10])])
             else:
                 tweet.sentiment = zeros(3)
 
@@ -297,9 +297,11 @@ class TweetCSVReader(Iterator[Tweet]):
 
 
 class TweetDuplicateFilter:
-    def __init__(self, batch_size: int = 100, dissimilarity_threshold: float = 0.1, capacity: int = 0):
+    def __init__(self, batch_size: int = 100, dissimilarity_threshold: float = 0.1, capacity: int = 0,
+                 like_threshold: int = 50):
         self.batch_size: int = batch_size
         self.dissimilarity_threshold: float = dissimilarity_threshold
+        self.like_threshold: int = like_threshold
         self._tweets: List[Optional[Tweet]] = [None] * (batch_size if capacity == 0 or capacity < batch_size else
                                                         capacity)
         self._i: int = 0
@@ -364,10 +366,23 @@ class TweetDuplicateFilter:
                 dissimilarity = (distance(tweet_text_0, tweet_text_1) / max(len(tweet_text_0), len(tweet_text_1)))
 
                 if dissimilarity < self.dissimilarity_threshold:
-                    self._tweets[i] = None
-                    self._tweets[j] = None
-                    self.eliminated_tweets += 2
-                    break
+                    tweet_0_deleted = False
+                    tweet_1_deleted = False
+
+                    if self.like_threshold == 0 or self._tweets[i].like_count < self.like_threshold:
+                        self._tweets[i] = None
+                        self.eliminated_tweets += 1
+                        tweet_0_deleted = True
+
+                    if self.like_threshold == 0 or self._tweets[j].like_count < self.like_threshold:
+                        self._tweets[j] = None
+                        self.eliminated_tweets += 1
+                        tweet_1_deleted = True
+
+                    if tweet_0_deleted:
+                        break
+                    elif tweet_1_deleted:
+                        continue
 
         self._eliminated = True
         self._i = 0
